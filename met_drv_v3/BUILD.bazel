@@ -1,0 +1,37 @@
+load("//build/bazel_mgk_rules:mgk_ko.bzl", "define_mgk_ko")
+
+package(
+    default_visibility = [
+        "//visibility:public",
+    ],
+)
+
+filegroup(
+    name = "headers",
+    srcs = glob([
+        "common/**/*.h",
+    ]),
+)
+
+filegroup(
+    name = "kbuilds",
+    srcs = [
+        "common/Kbuild",
+        "Kbuild",
+    ],
+)
+
+define_mgk_ko(
+    name = "met_drv_v3",
+    srcs = glob([
+        "**/*.c",
+        "**/*.h",
+        "**/Kbuild",
+        "**/Makefile",
+    ]) + [
+        "//kernel/samsung/gta9-modules/met_drv_v3/met_api:headers",
+    ],
+    outs = [
+        "met.ko",
+    ],
+)

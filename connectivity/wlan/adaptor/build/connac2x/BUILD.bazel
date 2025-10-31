@@ -1,0 +1,25 @@
+load("//build/bazel_mgk_rules:mgk_ko.bzl", "define_mgk_ko")
+
+package(
+    default_visibility = [
+        "//visibility:public",
+    ],
+)
+
+define_mgk_ko(
+    name = "wmt_chrdev_wifi_connac2",
+    srcs = glob([
+        "**/*.c",
+        "**/*.h",
+        "**/Kbuild",
+        "**/Makefile",
+    ]) + [
+        "//gta9-modules/connectivity/wlan/adaptor:sources",
+        "//gta9-modules/connectivity/common:headers",
+        "//gta9-modules/connectivity/conninfra:headers",
+    ],
+    deps = [
+        "//gta9-modules/connectivity/common:wmt_drv",
+        "//gta9-modules/connectivity/conninfra:conninfra",
+    ],
+)
