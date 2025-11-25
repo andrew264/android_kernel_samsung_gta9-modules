@@ -96,6 +96,14 @@
 #include "fw_log_wifi.h"
 #endif
 
+#define WIFI_MAC_ADDRESS_FILE "/efs/wifi/.mac.info"
+#define WIFI_MAC_ADDRESS_STR_LEN 17
+#ifdef MODULE
+#define WLAN_MODULE_NAME  module_name(THIS_MODULE)
+#else
+#define WLAN_MODULE_NAME  "wlan"
+#endif
+
 /*******************************************************************************
  *                              C O N S T A N T S
  *******************************************************************************
@@ -1554,6 +1562,97 @@ u16 wlanSelectQueue(struct net_device *dev,
 }
 #endif
 
+uint8_t char2Hex(uint8_t mByte)
+{
+    uint8_t temp = 0x0;
+    if (mByte >= 'A' && mByte <= 'F') {
+        temp = mByte - 'A' + 10;
+    } else if (mByte >= 'a' && mByte <= 'f') {
+        temp = mByte - 'a' + 10;
+    } else if (mByte >= '0' && mByte <= '9') {
+        temp = mByte - '0';
+    } else {
+        temp = 0xff;
+    }
+    return temp;
+}
+
+uint8_t catChar2Hex(uint8_t hByte, uint8_t lByte)
+{
+    return (char2Hex(hByte) << 4) | char2Hex(lByte);
+}
+
+void print_nv_data(char *title, char *data, int len)
+{
+    char str[1536] = {0};
+    int i = 0, j = 0;
+
+    if(strlen(title) + len*5 > 1500)
+        return;
+    if(snprintf(str, sizeof(str), "[%s] ", title) < 0) {
+        DBGLOG(INIT, ERROR,"snprintf error!\n");
+        return;
+    }
+    j += 3 + strlen(title);
+    for(i = 0; i < len; i++) {
+        if(snprintf(str + j, sizeof(str) - j, "0x%02X ", *(data + i)) < 0) {
+            DBGLOG(INIT, ERROR,"snprintf error!\n");
+            return;
+        }
+        j += 5;
+    }
+    DBGLOG(INIT, INFO,"%s\n", str);
+}
+
+void fetch_vendor_addr(struct ADAPTER *prAdapter, struct REG_INFO *prRegInfo)
+{
+    mm_segment_t fs;
+    uint32_t u4ConfigReadLen;
+    uint8_t *macAddr;
+    int i;
+    macAddr = (uint8_t *) kalMemAlloc(WIFI_MAC_ADDRESS_STR_LEN+1, VIR_MEM_TYPE);
+    kalMemZero(macAddr, WIFI_MAC_ADDRESS_STR_LEN+1);
+    pr_info("%s: [hdd_wlan_get_mac_address_from_efs]path=%s\n", WLAN_MODULE_NAME, WIFI_MAC_ADDRESS_FILE);
+
+    fs = get_fs();
+    set_fs(KERNEL_DS);
+    u4ConfigReadLen = 0;
+
+	if (macAddr) {
+		if (kalRequestFirmware(".mac.info", macAddr,
+			   WIFI_MAC_ADDRESS_STR_LEN, &u4ConfigReadLen,
+			   prAdapter->prGlueInfo->prDev) == 0) {
+			/* ToDo:: Nothing */
+                      pr_info("%s:Success get mac address efs/wifi:%s\n", WLAN_MODULE_NAME, macAddr);
+		}
+	} /* macAddr */
+
+    set_fs(fs);
+    macAddr[WIFI_MAC_ADDRESS_STR_LEN] = '\0';
+    pr_info("%s: Get mac address:%s\n", WLAN_MODULE_NAME, macAddr);
+
+    //Must match xx:xx:xx:xx:xx:xx
+    for (i = 2; i < WIFI_MAC_ADDRESS_STR_LEN; i += 3) {
+        if (macAddr[i] != ':') {
+            pr_info("%s: [0]Invalid MAC from efs: %s\n", WLAN_MODULE_NAME, macAddr);
+            return;
+        }
+    }
+
+    for (i = 0; i < WIFI_MAC_ADDRESS_STR_LEN; i += 3) {
+        if (char2Hex(macAddr[i]) == 0xff || char2Hex(macAddr[i + 1]) == 0xff) {
+            pr_info("%s: [1]Invalid MAC from efs: %s\n", WLAN_MODULE_NAME, macAddr);
+            return;
+        } else {
+            prRegInfo->prNvramSettings->aucMacAddress[i / 3] = catChar2Hex(macAddr[i], macAddr[i + 1]);
+            prRegInfo->aucMacAddr[i / 3] = catChar2Hex(macAddr[i], macAddr[i + 1]);
+        }
+    }
+    kalMemFree(macAddr, VIR_MEM_TYPE, WLAN_CFG_FILE_BUF_SIZE);
+    //print_nv_data("aucMacAddress",prNvramSettings->aucMacAddress,sizeof(prNvramSettings->aucMacAddress));
+    print_nv_data("prRegInfo",prRegInfo->aucMacAddr,sizeof(prRegInfo->aucMacAddr));
+}
+
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief Load NVRAM data and translate it into REG_INFO_T
@@ -1564,7 +1663,7 @@ u16 wlanSelectQueue(struct net_device *dev,
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
-static void glLoadNvram(struct GLUE_INFO *prGlueInfo,
+static void glLoadNvram(struct ADAPTER *prAdapter, struct GLUE_INFO *prGlueInfo,
 	struct REG_INFO *prRegInfo)
 {
 	struct WIFI_CFG_PARAM_STRUCT *prNvramSettings;
@@ -1592,16 +1691,21 @@ static void glLoadNvram(struct GLUE_INFO *prGlueInfo,
 	prRegInfo->prNvramSettings =
 		(struct WIFI_CFG_PARAM_STRUCT *)&g_aucNvram[0];
 	prNvramSettings = prRegInfo->prNvramSettings;
+	fetch_vendor_addr(prAdapter, prRegInfo);
 
 #if CFG_TC1_FEATURE
 		TC1_FAC_NAME(FacReadWifiMacAddr)(prRegInfo->aucMacAddr);
 		DBGLOG(INIT, INFO,
 			"MAC address: " MACSTR, MAC2STR(prRegInfo->aucMacAddr));
+		DBGLOG(INIT, INFO,"Read MAC addr from prRegInfo");
+		print_nv_data("prRegInfo",prRegInfo->aucMacAddr,sizeof(prRegInfo->aucMacAddr));
 #else
 	/* load MAC Address */
 	kalMemCopy(prRegInfo->aucMacAddr,
 			prNvramSettings->aucMacAddress,
 			PARAM_MAC_ADDR_LEN*sizeof(uint8_t));
+	DBGLOG(INIT, INFO,"Copy MAC addr from prNvramSettings");
+	print_nv_data("prNvramSettings",prNvramSettings->aucMacAddress,sizeof(prNvramSettings->aucMacAddress));
 #endif
 		/* load country code */
 		/* cast to wide characters */
@@ -4801,7 +4905,7 @@ void wlanOnPreAdapterStart(struct GLUE_INFO *prGlueInfo,
 	nicpmWakeUpWiFi(prAdapter);
 
 	/* Load NVRAM content to REG_INFO_T */
-	glLoadNvram(prGlueInfo, *pprRegInfo);
+	glLoadNvram(prAdapter, prGlueInfo, *pprRegInfo);
 
 	/* kalMemCopy(&prGlueInfo->rRegInfo, prRegInfo,
 	 *            sizeof(REG_INFO_T));
